@@ -3,7 +3,7 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width,initial-scale=1" />
-        <title>TCP Chat — WebSocket клієнт</title>
+        <title>TCP Chat — HTTP клієнт</title>
         <style>
             :root {
                 --bg: #121212;
@@ -159,7 +159,7 @@
         </div>
 
         <script>
-            const WS_URL = "wss://renderchatcolor.onrender.com";
+            const API_URL = "https://renderchatcolor.onrender.com";
             const nickEl = document.getElementById("nick");
             const colorEl = document.getElementById("color");
             const connectBtn = document.getElementById("connectBtn");
@@ -168,7 +168,9 @@
             const messagesEl = document.getElementById("messages");
             const messageInput = document.getElementById("messageInput");
             const sendBtn = document.getElementById("sendBtn");
-            let ws = null;
+            let isConnected = false;
+            let lastId = 0;
+            let pollAbort = null;
 
             function esc(s) {
                 return String(s)
@@ -208,48 +210,58 @@
                 messagesEl.scrollTop = messagesEl.scrollHeight;
             }
 
+            async function poll() {
+                while (isConnected) {
+                    try {
+                        pollAbort = new AbortController();
+                        const res = await fetch(`${API_URL}/poll?lastId=${lastId}`, {
+                            signal: pollAbort.signal
+                        });
+                        if (!res.ok) throw new Error();
+                        const data = await res.json();
+                        data.messages.forEach(renderMessage);
+                        lastId = data.nextId;
+                    } catch (e) {
+                        if (e.name !== 'AbortError' && isConnected) {
+                            await new Promise(r => setTimeout(r, 2000));
+                        }
+                    }
+                }
+            }
+
+            async function sendToServer(msg) {
+                try {
+                    await fetch(`${API_URL}/send`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(msg)
+                    });
+                } catch {}
+            }
+
             function connect() {
-                if (ws) return;
+                if (isConnected) return;
                 const nick = (nickEl.value || "Anon").trim();
                 const color = colorEl.value || "#ffffff";
-                try {
-                    ws = new WebSocket(WS_URL);
-                } catch (e) {
-                    alert("Не вдалося створити WebSocket. Правильний WS_URL?");
-                    return;
-                }
-                ws.addEventListener("open", () => {
-                    connectBtn.disabled = true;
-                    disconnectBtn.disabled = false;
-                    chatUi.style.display = "grid";
-                    const join = {
-                        nick,
-                        color,
-                        text: `(приєднався)`,
-                        time: new Date().toISOString(),
-                    };
-                    ws.send(JSON.stringify(join));
-                    messageInput.focus();
-                });
-                ws.addEventListener("message", (e) => {
-                    try {
-                        const msg = JSON.parse(e.data);
-                        renderMessage(msg);
-                    } catch {}
-                });
-                ws.addEventListener("close", () => {
-                    ws = null;
-                    connectBtn.disabled = false;
-                    disconnectBtn.disabled = true;
-                    chatUi.style.display = "none";
-                });
-                ws.addEventListener("error", () => {
-                    ws?.close();
-                });
+                
+                isConnected = true;
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                chatUi.style.display = "grid";
+                
+                const join = {
+                    nick,
+                    color,
+                    text: `(приєднався)`,
+                    time: new Date().toISOString(),
+                };
+                sendToServer(join);
+                messageInput.focus();
+                poll();
             }
 
             function disconnect() {
-                if (!ws) return;
+                if (!isConnected) return;
                 const nick = (nickEl.value || "Anon").trim();
                 const leave = {
                     nick,
@@ -257,15 +269,17 @@
                     text: `(вийшов)`,
                     time: new Date().toISOString(),
                 };
-                try {
-                    ws.send(JSON.stringify(leave));
-                } catch {}
-                ws.close();
-                ws = null;
+                sendToServer(leave);
+                
+                isConnected = false;
+                if (pollAbort) pollAbort.abort();
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                chatUi.style.display = "none";
             }
 
             function sendMessage() {
-                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                if (!isConnected) return;
                 const text = (messageInput.value || "").trim();
                 if (!text) return;
                 if (text.toLowerCase() === "exit") {
@@ -278,7 +292,7 @@
                     text,
                     time: new Date().toISOString(),
                 };
-                ws.send(JSON.stringify(msg));
+                sendToServer(msg);
                 messageInput.value = "";
                 messageInput.focus();
             }
@@ -290,7 +304,7 @@
                 if (e.key === "Enter") sendMessage();
             });
             window.addEventListener("beforeunload", () => {
-                if (ws) ws.close();
+                if (isConnected) disconnect();
             });
         </script>
     </body>
