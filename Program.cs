@@ -1,8 +1,8 @@
-﻿namespace TcpChat.ServerApp;
+﻿namespace RenderChatColor.ServerApp;
 using System.Threading;
 using System.Threading.Tasks;
 using System;
-using TcpChat.Infrastructure;
+using RenderChatColor.Infrastructure;
 
 public static class Program
 {
