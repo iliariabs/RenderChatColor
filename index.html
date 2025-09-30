@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="uk">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <title>TCP Chat — WebSocket клієнт</title>
+        <style>
+            :root {
+                --bg: #121212;
+                --panel: #1e1e1e;
+                --muted: #9aa0a6;
+                --accent: #1db954;
+            }
+            html,
+            body {
+                height: 100%;
+                margin: 0;
+                font-family:
+                    Inter,
+                    system-ui,
+                    Segoe UI,
+                    Roboto,
+                    Arial,
+                    sans-serif;
+                background: var(--bg);
+                color: #fff;
+            }
+            .wrap {
+                max-width: 860px;
+                margin: 28px auto;
+                padding: 20px;
+                background: var(--panel);
+                border-radius: 12px;
+                box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
+            }
+            .row {
+                display: flex;
+                gap: 12px;
+                align-items: center;
+            }
+
+            .flex {
+                flex: 1;
+            }
+
+            input[type="text"] {
+                background: #2a2a2a;
+                border: 0;
+                padding: 10px;
+                border-radius: 8px;
+                color: #fff;
+                width: 100%;
+            }
+
+            input[type="color"] {
+                background: #2a2a2a;
+                border: 0;
+                padding: 0;
+                border-radius: 8px;
+                width: 60px;
+                height: 40px;
+                cursor: pointer;
+            }
+            button {
+                background: var(--accent);
+                border: 0;
+                color: #fff;
+                padding: 10px 14px;
+                border-radius: 8px;
+                cursor: pointer;
+            }
+            button.secondary {
+                background: #3a3a3a;
+            }
+            #login {
+                display: grid;
+                gap: 8px;
+                margin-bottom: 16px;
+            }
+            #chatUi {
+                display: none;
+                gap: 12px;
+            }
+            #messages {
+                height: 380px;
+                overflow: auto;
+                padding: 12px;
+                border-radius: 8px;
+                background: #0f0f0f;
+                border: 1px solid #2a2a2a;
+            }
+            .msg {
+                margin-bottom: 8px;
+                line-height: 1.3;
+            }
+            .meta {
+                font-size: 13px;
+                color: var(--muted);
+                margin-bottom: 4px;
+            }
+            .nick {
+                font-weight: 600;
+                margin-right: 8px;
+            }
+            .inputRow {
+                display: flex;
+                gap: 8px;
+                margin-top: 8px;
+            }
+            .hint {
+                font-size: 13px;
+                color: var(--muted);
+                margin-top: 8px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="wrap">
+            <div id="login">
+                <div class="row">
+                    <input
+                        type="text"
+                        id="nick"
+                        class="flex"
+                        placeholder="Нікнейм"
+                        value="User"
+                    />
+                    <input
+                        type="color"
+                        id="color"
+                        title="Колір"
+                        value="#ffd166"
+                    />
+                    <button id="connectBtn">Підключитися</button>
+                    <button id="disconnectBtn" class="secondary" disabled>
+                        Відключитися
+                    </button>
+                </div>
+                <div class="hint">
+                    Введіть нік і виберіть колір. Колір відправника
+                    відображатиметься у всіх клієнтів.
+                </div>
+            </div>
+
+            <div id="chatUi">
+                <div id="messages" aria-live="polite"></div>
+                <div class="inputRow">
+                    <input
+                        type="text"
+                        id="messageInput"
+                        placeholder="Введіть повідомлення і натисніть Enter"
+                    />
+                    <button id="sendBtn">Надіслати</button>
+                </div>
+                <div class="hint">
+                    Формат відображення: [HH:mm] нік: повідомлення
+                </div>
+            </div>
+        </div>
+
+        <script>
+            const WS_URL = "";
+            const nickEl = document.getElementById("nick");
+            const colorEl = document.getElementById("color");
+            const connectBtn = document.getElementById("connectBtn");
+            const disconnectBtn = document.getElementById("disconnectBtn");
+            const chatUi = document.getElementById("chatUi");
+            const messagesEl = document.getElementById("messages");
+            const messageInput = document.getElementById("messageInput");
+            const sendBtn = document.getElementById("sendBtn");
+            let ws = null;
+
+            function esc(s) {
+                return String(s)
+                    .replaceAll("&", "&amp;")
+                    .replaceAll("<", "&lt;")
+                    .replaceAll(">", "&gt;")
+                    .replaceAll('"', "&quot;");
+            }
+
+            function tsFormat(iso) {
+                try {
+                    const d = new Date(iso);
+                    const h = String(d.getHours()).padStart(2, "0");
+                    const m = String(d.getMinutes()).padStart(2, "0");
+                    return `${h}:${m}`;
+                } catch {
+                    return "--:--";
+                }
+            }
+
+            function renderMessage(msg) {
+                const wrap = document.createElement("div");
+                wrap.className = "msg";
+                const meta = document.createElement("div");
+                meta.className = "meta";
+                meta.textContent = `[${tsFormat(msg.time)}]`;
+                const nickSpan = document.createElement("span");
+                nickSpan.className = "nick";
+                nickSpan.textContent = ` ${esc(msg.nick)}: `;
+                nickSpan.style.color = msg.color || "#fff";
+                const textSpan = document.createElement("span");
+                textSpan.innerHTML = esc(msg.text);
+                meta.appendChild(nickSpan);
+                wrap.appendChild(meta);
+                wrap.appendChild(textSpan);
+                messagesEl.appendChild(wrap);
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+            }
+
+            function connect() {
+                if (ws) return;
+                const nick = (nickEl.value || "Anon").trim();
+                const color = colorEl.value || "#ffffff";
+                try {
+                    ws = new WebSocket(WS_URL);
+                } catch (e) {
+                    alert("Не вдалося створити WebSocket. Правильний WS_URL?");
+                    return;
+                }
+                ws.addEventListener("open", () => {
+                    connectBtn.disabled = true;
+                    disconnectBtn.disabled = false;
+                    chatUi.style.display = "grid";
+                    const join = {
+                        nick,
+                        color,
+                        text: `(приєднався)`,
+                        time: new Date().toISOString(),
+                    };
+                    ws.send(JSON.stringify(join));
+                    messageInput.focus();
+                });
+                ws.addEventListener("message", (e) => {
+                    try {
+                        const msg = JSON.parse(e.data);
+                        renderMessage(msg);
+                    } catch {}
+                });
+                ws.addEventListener("close", () => {
+                    ws = null;
+                    connectBtn.disabled = false;
+                    disconnectBtn.disabled = true;
+                    chatUi.style.display = "none";
+                });
+                ws.addEventListener("error", () => {
+                    ws?.close();
+                });
+            }
+
+            function disconnect() {
+                if (!ws) return;
+                const nick = (nickEl.value || "Anon").trim();
+                const leave = {
+                    nick,
+                    color: colorEl.value,
+                    text: `(вийшов)`,
+                    time: new Date().toISOString(),
+                };
+                try {
+                    ws.send(JSON.stringify(leave));
+                } catch {}
+                ws.close();
+                ws = null;
+            }
+
+            function sendMessage() {
+                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                const text = (messageInput.value || "").trim();
+                if (!text) return;
+                if (text.toLowerCase() === "exit") {
+                    disconnect();
+                    return;
+                }
+                const msg = {
+                    nick: (nickEl.value || "Anon").trim(),
+                    color: colorEl.value,
+                    text,
+                    time: new Date().toISOString(),
+                };
+                ws.send(JSON.stringify(msg));
+                messageInput.value = "";
+                messageInput.focus();
+            }
+
+            connectBtn.addEventListener("click", connect);
+            disconnectBtn.addEventListener("click", disconnect);
+            sendBtn.addEventListener("click", sendMessage);
+            messageInput.addEventListener("keypress", (e) => {
+                if (e.key === "Enter") sendMessage();
+            });
+            window.addEventListener("beforeunload", () => {
+                if (ws) ws.close();
+            });
+        </script>
+    </body>
+</html>

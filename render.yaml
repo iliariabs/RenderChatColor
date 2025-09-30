@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: tcpchat-server
+    runtime: docker
+    dockerfilePath: Dockerfile 
+    plan: standard
+    envVars:
+      - key: PORT
+        value: "8080"            
